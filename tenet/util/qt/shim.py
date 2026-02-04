@@ -137,7 +137,19 @@ if USING_PYQT5:
     pass
 elif USING_PYSIDE6:
     try:
-        import shiboken6 as sip
+        import shiboken6
+
+        # Create a compatibility wrapper for shiboken6
+        # shiboken6 uses wrapInstance (capital I), PyQt5/sip uses wrapinstance (lowercase i)
+        class Shiboken6Compat:
+            """Compatibility wrapper for shiboken6 to match sip API"""
+
+            @staticmethod
+            def wrapinstance(address, qclass):
+                """Convert a C++ pointer (as integer) to a PySide6 object"""
+                return shiboken6.wrapInstance(address, qclass)
+
+        sip = Shiboken6Compat()
     except ImportError:
         # Create a fallback sip module with wrapinstance for PySide6
         class ShibokenFallback:
@@ -150,7 +162,7 @@ elif USING_PYSIDE6:
                 except:
                     # Last resort: try ctypes approach
                     return None
-        
+
         sip = ShibokenFallback()
 elif USING_PYSIDE2:
     try:
