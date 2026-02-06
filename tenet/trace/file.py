@@ -220,11 +220,12 @@ class TraceFile(object):
     An interface to load and query data directly from a trace file.
     """
 
-    def __init__(self, filepath, arch=None):
+    def __init__(self, filepath, arch=None, progress_callback=None):
         self.filepath = filepath
         self.arch = arch
         self.runtime_base_from_comment = None # Added
         self.parsed_comment_line = False # Added: Flag to indicate if the first line was parsed as comment
+        self.progress_callback = progress_callback # Added: Progress callback for loading status
 
         #
         # TODO: really, the trace file should auto-detect arch imo but i'll
@@ -348,7 +349,24 @@ class TraceFile(object):
     #-------------------------------------------------------------------------
     # Public
     #-------------------------------------------------------------------------
-    
+
+    def _update_progress(self, current, total, message="Processing..."):
+        """
+        Update loading progress through callback if available.
+
+        Args:
+            current: Current progress value
+            total: Total value for progress calculation
+            message: Progress message to display
+        """
+        if self.progress_callback:
+            percent = int((current / total) * 100) if total > 0 else 0
+            try:
+                self.progress_callback(percent, message)
+            except Exception as e:
+                # Silently fail to avoid breaking the loading process
+                logger.debug(f"Progress callback failed: {e}")
+
     #
     # I should really define this somewhere more notable... but throughout
     # this project you will see the term 'idx', this is a simple abbreviation
@@ -505,13 +523,18 @@ class TraceFile(object):
 
     def _load_packed_trace(self, filepath):
         """
-        Load a packed trace from disk.
+        Load a packed trace from disk with progress reporting.
         """
+        self._update_progress(0, 100, "Loading packed trace...")
 
         with zipfile.ZipFile(filepath, 'r') as zip_archive:
+            self._update_progress(10, 100, "Loading trace header...")
             self._load_header(zip_archive)
+
+            self._update_progress(30, 100, "Loading trace segments...")
             self._load_segments(zip_archive)
 
+        self._update_progress(100, 100, "Packed trace loaded!")
         self.filepath = filepath
 
     def _select_arch(self, magic):
@@ -637,10 +660,13 @@ class TraceFile(object):
 
     def _load_text_trace(self, filepath):
         """
-        Load a text trace from disk.
+        Load a text trace from disk with progress reporting.
         """
         idx = 0
-        
+
+        # Update progress - starting
+        self._update_progress(0, 100, "Initializing trace loading...")
+
         # mappings of address/mask and their mapped (compressed) id
         # - NOTE: these are only used when converting traces from text to binary
         self.ip_map = collections.OrderedDict()
@@ -653,6 +679,7 @@ class TraceFile(object):
         #   self._select_arch(0)
 
         # hash (CRC32) the source / text filepath before loading it
+        self._update_progress(1, 100, "Computing file hash...")
         self.original_hash = hash_file(filepath)
 
         # Initialize runtime base and parsed flag (also done in __init__ for clarity)
@@ -663,6 +690,7 @@ class TraceFile(object):
             self.parsed_comment_line = False
 
         # Try to parse the first line for base address
+        self._update_progress(2, 100, "Parsing trace header...")
         try:
             with open(filepath, 'r') as f_check:
                 first_line = f_check.readline()
@@ -679,8 +707,25 @@ class TraceFile(object):
         except Exception as e:
             pmsg(f"Could not read or parse first line for base address: {e}")
 
+        # Count total lines for progress calculation
+        self._update_progress(3, 100, "Counting trace lines...")
+        try:
+            with open(filepath, 'r') as f_count:
+                # Subtract 1 for the comment line if present
+                total_lines = sum(1 for _ in f_count) - (1 if self.parsed_comment_line else 0)
+        except Exception as e:
+            logger.warning(f"Could not count lines: {e}, using indefinite progress")
+            total_lines = 0
+
         # load / parse a text trace into trace segments
+        self._update_progress(5, 100, f"Loading {total_lines:,} trace lines...")
+        processed_lines = 0
+        segment_count = 0
+
         with open(filepath, 'r') as f:
+            # Skip first line if it was parsed as a comment
+            if self.parsed_comment_line:
+                f.readline()
 
             # loop until all of the lines in the file have been processed
             while True:
@@ -692,18 +737,35 @@ class TraceFile(object):
                     break
 
                 segment_id = len(self.segments)
+                segment_count += 1
+
+                # Update progress for this segment
+                if total_lines > 0:
+                    progress_percent = 5 + int((processed_lines / total_lines) * 70)  # 5-75%
+                    self._update_progress(
+                        progress_percent,
+                        100,
+                        f"Processing segment {segment_count} ({processed_lines:,}/{total_lines:,} lines)..."
+                    )
 
                 # create a new trace segment from the given lines of text
                 segment = TraceSegment(self, segment_id, idx)
                 segment.from_lines(lines)
                 idx += segment.length
+                processed_lines += len(lines)
 
                 # save the segment
                 self.segments.append(segment)
                 #break # for debugging...
 
+        # Finalize and save
+        self._update_progress(75, 100, "Finalizing trace data...")
         self._finalize()
+
+        self._update_progress(90, 100, "Saving packed trace...")
         self._save()
+
+        self._update_progress(100, 100, "Trace loaded successfully!")
 
     def get_ip(self, idx):
         """
@@ -768,8 +830,9 @@ class TraceFile(object):
 
     def _finalize(self):
         """
-        Bake a parsed text trace into its final, compressed form.
+        Bake a parsed text trace into its final, compressed form with progress reporting.
         """
+        self._update_progress(75, 100, "Building address tables...")
 
         if TRACE_STATS:
             self._init_stats()
@@ -778,6 +841,7 @@ class TraceFile(object):
         pointer_type = type_from_width(self.arch.POINTER_SIZE)
 
         # bake the master ip address table
+        self._update_progress(76, 100, "Processing instruction addresses...")
         ip_map = self.ip_map
         ip_addrs = sorted(list(self.ip_map.keys()))
         self.ip_addrs = array.array(pointer_type, ip_addrs)
@@ -787,6 +851,7 @@ class TraceFile(object):
         }
 
         # bake the master (aligned) memory address table
+        self._update_progress(77, 100, "Processing memory addresses...")
         mem_map = self.mem_map
         mem_map_len = len(mem_map)
         mem_addrs = sorted(list(mem_map.keys()))
@@ -799,6 +864,7 @@ class TraceFile(object):
         }
 
         # pre-compute the 'size' of the data represented by a register mask
+        self._update_progress(78, 100, "Computing register mask sizes...")
         self.mask_sizes = [number_of_bits_set(mask) * self.arch.POINTER_SIZE for mask in self.masks]
 
         assert self.segment_length <= UINT_MAX
@@ -808,7 +874,15 @@ class TraceFile(object):
         self.mem_addr_type = type_from_limit(mem_map_len)
 
         # finish packing the trace
-        for segment in self.segments:
+        total_segments = len(self.segments)
+        for i, segment in enumerate(self.segments):
+            # Update progress for each segment
+            progress = 79 + int((i / total_segments) * 11)  # 79-90%
+            self._update_progress(
+                progress,
+                100,
+                f"Finalizing segment {i+1}/{total_segments}..."
+            )
             segment.finalize(remapped_ip, remapped_mem)
 
             if TRACE_STATS:

@@ -937,8 +937,9 @@ class TraceBar(QtWidgets.QWidget):
 
         dctx = disassembler[self.pctx]
 
-        # draw each cell + border
-        for idx in range(self.start_idx, self._last_trace_idx):
+        # PERFORMANCE FIX: Only iterate over visible range (end_idx), not entire trace (_last_trace_idx)
+        # This prevents massive loops when scrolling through large traces
+        for idx in range(self.start_idx, min(self.end_idx, self._last_trace_idx)):
 
             # get the executed/code address for the current idx that will represent this cell
             address = self.reader.get_ip(idx)

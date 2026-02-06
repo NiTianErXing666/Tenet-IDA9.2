@@ -1,6 +1,7 @@
 import os
 import logging
 import traceback
+import threading
 
 from tenet.util.qt import *
 from tenet.util.log import pmsg
@@ -270,9 +271,8 @@ class TenetContext(object):
 
     def interactive_load_trace(self, reloading=False):
         """
-        Handle UI actions for loading a trace file.
+        Handle UI actions for loading a trace file asynchronously.
         """
-
         # prompt the user with a file dialog to select a trace of interest
         filenames = self._select_trace_file()
         if not filenames:
@@ -280,33 +280,166 @@ class TenetContext(object):
 
         # TODO: ehh, only support loading one trace at a time right now
         assert len(filenames) == 1, "Please select only one trace file to load"
-        disassembler.show_wait_box("Loading trace from disk...")
+
         filepath = filenames[0]
 
-        # attempt to load the user selected trace
+        # Initialize loading state
+        self._loading_cancelled = False
+        self._load_complete = False
+        self._load_error = None
+        self._load_result = None
+        self._is_reloading = reloading
+
+        # Create progress wait box with cancel support
+        from tenet.util.qt.waitbox import WaitBox
+        self._load_wait_box = WaitBox(
+            f"Loading trace...\n{os.path.basename(filepath)}\n\nInitializing...",
+            "Loading Trace - Please Wait",
+            abort=self._abort_load_trace
+        )
+        self._load_wait_box.show(modal=False)
+
+        # Define progress callback for the loader
+        def progress_callback(percent, message):
+            """Progress callback during trace loading"""
+            if self._loading_cancelled:
+                return
+
+            # Update wait box text
+            self._load_wait_box.set_text(
+                f"Loading trace...\n{os.path.basename(filepath)}\n\n{message}\n{percent}%"
+            )
+
+            # Process UI events to keep IDA responsive
+            qta = QtCore.QCoreApplication.instance()
+            if qta:
+                qta.processEvents()
+
+        # Start background thread for loading
+        self._load_thread = threading.Thread(
+            target=self._load_trace_async,
+            args=(filepath, progress_callback),
+            daemon=True
+        )
+        self._load_thread.start()
+
+        # Setup timer to check completion
+        self._load_timer = QtCore.QTimer()
+        self._load_timer.timeout.connect(self._check_load_complete)
+        self._load_timer.start(100)  # Check every 100ms
+
+    def _abort_load_trace(self):
+        """Cancel the ongoing trace loading"""
+        self._loading_cancelled = True
+        pmsg("Trace loading cancelled by user")
+
+    def _load_trace_async(self, filepath, progress_callback):
+        """
+        Load trace in background thread (TraceFile only, no IDA API calls)
+        """
         try:
-            self.load_trace(filepath)
-        except:
+            if self._loading_cancelled:
+                logger.info("Loading was cancelled before starting")
+                return
+
+            # Import here to avoid circular dependency
+            from tenet.trace.file import TraceFile
+
+            # Only load TraceFile in background thread (pure file I/O, no IDA API)
+            # This avoids the "Function can be called from the main thread only" error
+            trace_file = TraceFile(filepath, self.arch, progress_callback=progress_callback)
+
+            # Store the loaded trace file for main thread to create TraceReader
+            self._loaded_trace_file = trace_file
+            self._load_result = "trace_file_loaded"
+            logger.info(f"Successfully loaded trace file with {trace_file.length:,} instructions")
+
+        except Exception as e:
+            error_msg = str(e)
+            import traceback as tb
+            error_msg += "\n" + tb.format_exc()
+            self._load_error = error_msg
+            logger.error(f"Failed to load trace file: {error_msg}")
+
+    def _check_load_complete(self):
+        """
+        Check if background loading is complete and finalize in main thread
+        """
+        # Check if thread is still running
+        if self._load_thread.is_alive():
+            # Still loading, continue checking
+            return
+
+        # Loading complete or failed
+        self._load_timer.stop()
+        self._load_wait_box.close()
+
+        # Handle cancellation
+        if self._loading_cancelled:
+            pmsg("Trace loading was cancelled")
+            return
+
+        # Handle errors
+        if self._load_error:
             pmsg("Failed to load trace...")
-            pmsg(traceback.format_exc())
-            disassembler.hide_wait_box()
-            return
-        disassembler.hide_wait_box()
-
-        #
-        # if we are 're-loading', we are loading over an existing trace, so
-        # there should already be plugin UI elements visible and active.
-        # 
-        # do not attempt to show / re-position the UI elements as they may
-        # have been moved by the user from their default positions into 
-        # locations that they prefer
-        #
-
-        if reloading:
+            pmsg(self._load_error)
+            # Show error dialog
+            import ida_kernwin
+            ida_kernwin.warning(f"Failed to load trace:\n{self._load_error[:500]}")
             return
 
-        # show the plugin UI elements, and dock its windows as appropriate
-        self.show_ui()
+        # Handle success - create TraceReader in main thread
+        if self._load_result == "trace_file_loaded":
+            try:
+                # Show final progress update
+                self._load_wait_box.set_text(
+                    f"Finalizing trace...\n{os.path.basename(self._loaded_trace_file.filepath)}\n\nInitializing reader..."
+                )
+                qta = QtCore.QCoreApplication.instance()
+                if qta:
+                    qta.processEvents()
+
+                # Create TraceReader in main thread with pre-loaded TraceFile
+                # (can safely call IDA APIs now because we're in main thread)
+                self.reader = TraceReader(
+                    None,  # filepath not needed
+                    self.arch,
+                    disassembler[self],
+                    trace_file=self._loaded_trace_file  # Use pre-loaded TraceFile
+                )
+
+                pmsg(f"Loaded trace {self.reader.trace.filepath}")
+                pmsg(f"- {self.reader.trace.length:,} instructions...")
+
+                # Finalize in main thread (UI operations must be in main thread)
+                self._finalize_load_after_async()
+
+            except Exception as e:
+                pmsg("Failed to finalize trace loading...")
+                pmsg(traceback.format_exc())
+                import ida_kernwin
+                ida_kernwin.warning(f"Failed to initialize trace reader:\n{str(e)[:500]}")
+
+    def _finalize_load_after_async(self):
+        """
+        Finalize loading after async thread completes (runs in main thread)
+        """
+        # Hook into disassembler
+        self.core.hook()
+
+        # Attach trace engine to UI controllers
+        self.breakpoints.reset()
+        self.trace.attach_reader(self.reader)
+        self.stack.attach_reader(self.reader)
+        self.memory.attach_reader(self.reader)
+        self.registers.attach_reader(self.reader)
+
+        # Connect trace reader signals
+        self.reader.idx_changed(self._idx_changed)
+
+        # Show UI if not reloading
+        if not self._is_reloading:
+            self.show_ui()
         
     def interactive_next_execution(self):
         """

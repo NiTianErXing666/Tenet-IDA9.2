@@ -54,13 +54,21 @@ class TraceReader(object):
     A high level, debugger-like interface for querying Tenet traces.
     """
 
-    def __init__(self, filepath, architecture, dctx=None):
+    def __init__(self, filepath, architecture, dctx=None, progress_callback=None, trace_file=None):
         self.idx = 0
         self.dctx = dctx
         self.arch = architecture
 
-        # load the given trace file from disk
-        self.trace = TraceFile(filepath, architecture)
+        # Load or use the provided trace file
+        if trace_file is not None:
+            # Use pre-loaded TraceFile (from async loading)
+            self.trace = trace_file
+        elif filepath is not None:
+            # Load trace file from disk
+            self.trace = TraceFile(filepath, architecture, progress_callback=progress_callback)
+        else:
+            raise ValueError("Either filepath or trace_file must be provided")
+
         # Check if base address was parsed from comment and calculate slide
         manual_slide = None
         # Check existence of attribute first to avoid errors if TraceFile init failed partially
@@ -74,6 +82,8 @@ class TraceReader(object):
                 manual_slide = None # Ensure manual_slide is None if calculation fails
 
         # Pass the manual slide to TraceAnalysis, it will use it if not None
+        # NOTE: TraceAnalysis calls IDA APIs, so this must be done in main thread
+        from tenet.trace.analysis import TraceAnalysis
         self.analysis = TraceAnalysis(self.trace, dctx, manual_slide=manual_slide)
 
         self._idx_cached_registers = -1
