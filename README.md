@@ -1,75 +1,75 @@
-# Trace Tenet - Android Trace Analysis Tools
+# Trace Tenet - Android 逆向追踪分析工具集
 
-A comprehensive trace analysis toolkit for Android reverse engineering, featuring native trace generation and IDA Pro trace visualization.
+一套完整的 Android 逆向工程追踪分析工具包，支持原生追踪生成和 IDA Pro 追踪可视化。
 
-## Project Structure
+## 项目结构
 
 ```
 trace_tenet/
 ├── trace_tools/
-│   ├── libtrace.so           # Native trace library (push to /data/local/tmp/)
-│   ├── trace_helper.js       # Frida script using libtrace.so
-│   └── tenet_tracer_v2.js    # Frida Stalker-based tracer
-├── tenet/                    # Tenet IDA Pro plugin
-│   ├── integration/          # IDA integration
-│   ├── trace/                # Trace file reader & parser
-│   └── ui/                   # User interface
-└── tenet_plugin.py           # IDA plugin entry point
+│   ├── libtrace.so           # 原生追踪库（推送到 /data/local/tmp/）
+│   ├── trace_helper.js       # 使用 libtrace.so 的 Frida 脚本
+│   └── tenet_tracer_v2.js    # 基于 Frida Stalker 的追踪器
+├── tenet/                    # Tenet IDA Pro 插件
+│   ├── integration/          # IDA 集成
+│   ├── trace/                # 追踪文件读取与解析
+│   └── ui/                   # 用户界面
+└── tenet_plugin.py           # IDA 插件入口
 ```
 
-## Features
+## 功能特性
 
-- **Native Trace Library** (`libtrace.so`) - High-performance trace generation using QBDI
-- **Frida Integration** - Two tracing methods (libtrace.so / Stalker)
-- **Tenet Format** - Compatible with Tenet trace explorer for IDA Pro
-- **IDA Pro Plugin** - Visualize execution traces with memory/register tracking
+- **原生追踪库** (`libtrace.so`) - 使用 QBDI 实现高性能追踪
+- **Frida 集成** - 两种追踪方式（libtrace.so / Stalker）
+- **Tenet 格式** - 兼容 IDA Pro 的 Tenet 追踪浏览器
+- **IDA Pro 插件** - 可视化执行追踪，支持内存/寄存器跟踪
 
 ---
 
-## Part 1: Trace Generation on Android
+## 第一部分：Android 端追踪生成
 
-### Method A: Using libtrace.so (Recommended)
+### 方法 A：使用 libtrace.so（推荐）
 
-#### 1. Push libtrace.so to Device
+#### 1. 将 libtrace.so 推送到设备
 
 ```bash
 adb push trace_tools/libtrace.so /data/local/tmp/
 adb shell chmod 755 /data/local/tmp/libtrace.so
 ```
 
-#### 2. Configure trace_helper.js
+#### 2. 配置 trace_helper.js
 
-Edit `trace_tools/trace_helper.js` and modify the `CONFIG` object:
+编辑 `trace_tools/trace_helper.js`，修改 `CONFIG` 对象：
 
 ```javascript
 var CONFIG = {
-    // Path to libtrace.so on device
+    // libtrace.so 在设备上的路径
     traceLibraryPath: "/data/local/tmp/libtrace.so",
 
-    // Trace mode
-    // 0 = CALL_ONLY      - Track function calls only
-    // 1 = FULL_TRACE     - Track all instructions
-    // 2 = SVC_TRACE      - Track SVC instructions
-    // 3 = TENET_TRACE    - Generate Tenet-compatible format
+    // 追踪模式
+    // 0 = CALL_ONLY      - 仅追踪函数调用
+    // 1 = FULL_TRACE     - 追踪所有指令
+    // 2 = SVC_TRACE      - 追踪 SVC 指令
+    // 3 = TENET_TRACE    - 生成 Tenet 兼容格式
     currentMode: 3,
 
-    // Output mode
-    // 0 = FILE      - Save to file only
-    // 1 = CONSOLE   - Print to logcat only
-    // 2 = BOTH      - Both file and console
+    // 输出模式
+    // 0 = FILE      - 仅保存到文件
+    // 1 = CONSOLE   - 仅打印到 logcat
+    // 2 = BOTH      - 同时输出到文件和 logcat
     outputMode: 0,
 
-    // Target configuration
+    // 目标配置
     targets: [
         {
-            moduleName: "libtarget.so",      // Target SO module name
+            moduleName: "libtarget.so",      // 目标 SO 模块名
             hooks: [
                 {
-                    type: "offset",           // Hook by offset
-                    offset: 0x1234,          // Function offset
-                    signature: ["pointer", "pointer"],  // Function signature
-                    replace: true,           // Replace function
-                    name: "target_function"  // Function name for logging
+                    type: "offset",           // 按偏移地址 Hook
+                    offset: 0x1234,          // 函数偏移
+                    signature: ["pointer", "pointer"],  // 函数签名
+                    replace: true,           // 替换函数
+                    name: "target_function"  // 日志中的函数名
                 }
             ]
         }
@@ -77,69 +77,69 @@ var CONFIG = {
 };
 ```
 
-#### 3. Run Frida with trace_helper.js
+#### 3. 使用 trace_helper.js 运行 Frida
 
 ```bash
-# Spawn application
+# 启动应用
 frida -U -f com.example.app -l trace_tools/trace_helper.js --no-pause
 
-# Or attach to running process
+# 或附加到运行中的进程
 frida -U com.example.app -l trace_tools/trace_helper.js
 ```
 
-The trace file will be generated in `/data/local/tmp/` by default.
+追踪文件默认会生成在 `/data/local/tmp/` 目录下。
 
 ---
 
-### Method B: Using Frida Stalker (Simpler)
+### 方法 B：使用 Frida Stalker（更简单）
 
-The `tenet_tracer_v2.js` script uses Frida's built-in Stalker for tracing. It automatically detects the package name and saves the trace to the app's data directory.
+`tenet_tracer_v2.js` 脚本使用 Frida 内置的 Stalker 进行追踪。它会自动检测包名并将追踪保存到应用的数据目录。
 
-#### 1. Configure tenet_tracer_v2.js
+#### 1. 配置 tenet_tracer_v2.js
 
-Edit `trace_tools/tenet_tracer_v2.js`:
+编辑 `trace_tools/tenet_tracer_v2.js`：
 
 ```javascript
-// Target configuration
-const TARGET_MODULE = "libtarget.so";      // Target SO module
-const TARGET_OFFSET = 0x1234;              // Function offset to trace
-const MAX_INSTRUCTIONS = 900000000;        // Instruction limit
-const PACKAGE_NAME = "com.example.app";    // Optional: null for auto-detect
-const OUTPUT_FILENAME = "tenet.trace";     // Output filename
+// 目标配置
+const TARGET_MODULE = "libtarget.so";      // 目标 SO 模块
+const TARGET_OFFSET = 0x1234;              // 要追踪的函数偏移
+const MAX_INSTRUCTIONS = 900000000;        // 指令数量限制
+const PACKAGE_NAME = "com.example.app";    // 可选：null 表示自动检测
+const OUTPUT_FILENAME = "tenet.trace";     // 输出文件名
 ```
 
-#### 2. Run the Tracer
+#### 2. 运行追踪器
 
 ```bash
-# Spawn the application
+# 启动应用
 frida -U -f com.example.app -l trace_tools/tenet_tracer_v2.js --no-pause
 
-# Or attach to running process
+# 或附加到运行中的进程
 frida -U com.example.app -l trace_tools/tenet_tracer_v2.js
 ```
 
-#### 3. Trace Output Location
+#### 3. 追踪文件位置
 
-The script automatically saves the trace file to:
-- Primary: `/data/data/<package_name>/tenet.trace`
-- Fallback: `/data/local/tmp/tenet.trace`
+脚本会自动将追踪文件保存到：
+- 主路径：`/data/data/<包名>/tenet.trace`
+- 备用路径：`/data/local/tmp/tenet.trace`
 
-Pull the trace file:
+拉取追踪文件：
 
 ```bash
-# After tracing is complete
+# 追踪完成后
 adb pull /data/data/com.example.app/tenet.trace ./
 ```
 
 ---
 
-## Part 2: Installing Tenet Plugin in IDA Pro
+## 第二部分：在 IDA Pro 中安装 Tenet 插件
 
-### Step 1: Locate IDA Plugins Directory
+### 步骤 1：找到 IDA 插件目录
 
 **Windows:**
 ```
-C:\Users\<username>\AppData\Roaming\Hex-Rays\IDA Pro\plugins\
+C:\Users\<用户名>\AppData\Roaming\Hex-Rays\IDA Pro\plugins\
 ```
 
 **Linux:**
@@ -152,58 +152,58 @@ C:\Users\<username>\AppData\Roaming\Hex-Rays\IDA Pro\plugins\
 ~/.idapro/plugins/
 ```
 
-### Step 2: Copy Tenet Files
+### 步骤 2：复制 Tenet 文件
 
-Copy the entire `tenet` directory and plugin file:
+复制整个 `tenet` 目录和插件文件：
 
 ```bash
-# Windows example
-xcopy /E /I tenet C:\Users\<username>\AppData\Roaming\Hex-Rays\IDA Pro\plugins\tenet
-copy tenet_plugin.py C:\Users\<username>\AppData\Roaming\Hex-Rays\IDA Pro\plugins\
+# Windows 示例
+xcopy /E /I tenet C:\Users\<用户名>\AppData\Roaming\Hex-Rays\IDA Pro\plugins\tenet
+copy tenet_plugin.py C:\Users\<用户名>\AppData\Roaming\Hex-Rays\IDA Pro\plugins\
 ```
 
-Or manually:
-1. Copy `tenet/` folder to IDA `plugins/` directory
-2. Copy `tenet_plugin.py` to IDA `plugins/` directory
+或手动操作：
+1. 将 `tenet/` 文件夹复制到 IDA 的 `plugins/` 目录
+2. 将 `tenet_plugin.py` 复制到 IDA 的 `plugins/` 目录
 
-### Step 3: Verify Installation
+### 步骤 3：验证安装
 
-1. Restart IDA Pro
-2. Open any IDB database
-3. Check `Edit -> Plugins` menu for "Tenet" (or it loads automatically)
-
----
-
-## Part 3: Using Tenet in IDA Pro
-
-### Loading a Trace File
-
-1. Open your IDB database in IDA Pro
-2. Ensure the target SO is loaded at the correct base address
-3. Load trace via: `File -> Load -> Tenet Trace` (or use the plugin menu)
-4. Select your `tenet.trace` file
-
-### Tenet UI Features
-
-- **Trace View** - Step through execution trace
-- **Register View** - View register changes over time
-- **Memory View** - Track memory reads/writes
-- **Breakpoint View** - Manage execution breakpoints
-- **Hex View** - Examine memory regions
-
-### Keyboard Shortcuts
-
-Once loaded, Tenet provides standard trace controls:
-- `F5` / `F9` - Start/Continue trace playback
-- `F7` - Step into
-- `F8` - Step over
-- Navigation hotkeys for jumping to addresses
+1. 重启 IDA Pro
+2. 打开任意 IDB 数据库
+3. 在 `Edit -> Plugins` 菜单中检查 "Tenet"（或它会自动加载）
 
 ---
 
-## Configuration Examples
+## 第三部分：在 IDA Pro 中使用 Tenet
 
-### Example 1: Tracing an Encryption Function
+### 加载追踪文件
+
+1. 在 IDA Pro 中打开你的 IDB 数据库
+2. 确保目标 SO 已加载到正确的基址
+3. 通过菜单加载追踪：`File -> Load -> Tenet Trace`（或使用插件菜单）
+4. 选择你的 `tenet.trace` 文件
+
+### Tenet UI 功能
+
+- **Trace View** - 单步执行追踪
+- **Register View** - 查看寄存器随时间的变化
+- **Memory View** - 跟踪内存读/写操作
+- **Breakpoint View** - 管理执行断点
+- **Hex View** - 检查内存区域
+
+### 键盘快捷键
+
+加载后，Tenet 提供标准的追踪控制：
+- `F5` / `F9` - 开始/继续追踪回放
+- `F7` - 单步进入
+- `F8` - 单步跳过
+- 地址跳转导航快捷键
+
+---
+
+## 配置示例
+
+### 示例 1：追踪加密函数
 
 ```javascript
 // trace_helper.js
@@ -223,7 +223,7 @@ targets: [
 ]
 ```
 
-### Example 2: Multiple Functions
+### 示例 2：多个函数
 
 ```javascript
 targets: [
@@ -251,55 +251,55 @@ targets: [
 
 ---
 
-## Troubleshooting
+## 故障排除
 
-### libtrace.so Issues
+### libtrace.so 相关问题
 
-**Error: `dlopen failed`**
+**错误：`dlopen failed`**
 ```bash
-# Check file permissions
+# 检查文件权限
 adb shell ls -la /data/local/tmp/libtrace.so
 
-# Ensure executable
+# 确保可执行
 adb shell chmod 755 /data/local/tmp/libtrace.so
 
-# Check architecture compatibility (arm64 vs arm)
+# 检查架构兼容性（arm64 vs arm）
 adb shell file /data/local/tmp/libtrace.so
 ```
 
-### Frida Stalker Issues
+### Frida Stalker 相关问题
 
-**Trace file not created:**
-- Check write permissions: `adb shell ls -la /data/data/<pkg>/`
-- Manually specify `PACKAGE_NAME` if auto-detection fails
-- Check logcat for errors: `adb logcat | grep -i frida`
+**追踪文件未创建：**
+- 检查写权限：`adb shell ls -la /data/data/<包名>/`
+- 如果自动检测失败，手动指定 `PACKAGE_NAME`
+- 检查 logcat 中的错误：`adb logcat | grep -i frida`
 
-### IDA Plugin Issues
+### IDA 插件相关问题
 
-**Plugin not loading:**
-- Check IDA Python console: `View -> Open subviews -> Python`
-- Verify `tenet` folder structure is intact
-- Check IDA version compatibility (tested with IDA Pro 7.x+)
+**插件未加载：**
+- 检查 IDA Python 控制台：`View -> Open subviews -> Python`
+- 验证 `tenet` 文件夹结构完整
+- 检查 IDA 版本兼容性（测试于 IDA Pro 7.x+）
 
-**Trace file won't load:**
-- Ensure SO base address matches (IDA view vs trace file header)
-- Verify trace file format is correct (should start with `# SO:` header)
-- Check for corrupted trace files (size should be reasonable)
-
----
-
-## Architecture Support
-
-| Architecture | libtrace.so | Tenet Plugin |
-|-------------|-------------|--------------|
-| ARM64       | ✓           | ✓            |
-| ARM32       | ✓           | ✓            |
-| x86         | -           | ✓            |
-| x64         | -           | ✓            |
+**追踪文件无法加载：**
+- 确保 SO 基址匹配（IDA 视图与追踪文件头）
+- 验证追踪文件格式正确（应以 `# SO:` 开头）
+- 检查追踪文件是否损坏（文件大小应合理）
 
 ---
 
-## References
+## 架构支持
+
+| 架构 | libtrace.so | Tenet 插件 |
+|------|-------------|------------|
+| ARM64   | ✓           | ✓          |
+| ARM32   | ✓           | ✓          |
+| x86     | -           | ✓          |
+| x64     | -           | ✓          |
+
+---
+
+## 参考资料
 
 - Tenet: https://github.com/gaasedelen/tenet
 - Frida: https://frida.re/docs/
@@ -307,14 +307,14 @@ adb shell file /data/local/tmp/libtrace.so
 
 ---
 
-## License
+## 许可证
 
-This project is based on [Tenet](https://github.com/gaasedelen/tenet) by gaasedelen.
-Please refer to the original project for license information.
+本项目基于 [Tenet](https://github.com/gaasedelen/tenet) by gaasedelen 修改。
+请参考原项目获取许可信息。
 
 ---
 
-## Contributing
+## 贡献
 
-This is a modified/custom version of Tenet for Android trace analysis.
-For issues or questions, please refer to the original Tenet repository.
+这是 Tenet 的修改/定制版本，用于 Android 追踪分析。
+如有问题或疑问，请参考原 Tenet 仓库。
